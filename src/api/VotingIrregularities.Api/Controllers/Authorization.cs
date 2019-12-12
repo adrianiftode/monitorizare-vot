@@ -235,7 +235,7 @@ namespace VotingIrregularities.Api.Controllers
             else {
                 // verific daca userul exista si daca nu are asociat un alt device, il returneaza din baza
                 var userInfo = await _mediator.Send(new ObserverApplicationUser {
-                    Phone = request.User,
+                    Phone = request.User, 
                     Pin = request.Password,
                     UDID = request.UniqueId
                 });

@@ -1,84 +1,66 @@
-﻿using System;
+﻿using AutoMapper;
+using MediatR;
+using Microsoft.ApplicationInsights.Extensibility;
+using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc.Authorization;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.PlatformAbstractions;
+using Serilog;
+using SimpleInjector;
+using SimpleInjector.Lifestyles;
+using Swashbuckle.AspNetCore.Swagger;
+using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Reflection;
 using System.Threading.Tasks;
-using AutoMapper;
-using MediatR;
-using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Mvc.Controllers;
-using Microsoft.AspNetCore.Mvc.ViewComponents;
-using Microsoft.EntityFrameworkCore;
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.PlatformAbstractions;
-using Serilog;
-using VotingIrregularities.Api.Extensions;
-using SimpleInjector;
-using SimpleInjector.Integration.AspNetCore.Mvc;
-using VoteMonitor.Entities;
-using ILogger = Microsoft.Extensions.Logging.ILogger;
-using Microsoft.Extensions.Options;
-using VotingIrregularities.Api.Models.AccountViewModels;
-using Microsoft.AspNetCore.Mvc;
-using SimpleInjector.Lifestyles;
-using Swashbuckle.AspNetCore.Swagger;
-using VotingIrregularities.Api.Options;
-using Microsoft.ApplicationInsights.Extensibility;
-using Microsoft.AspNetCore.Authorization;
-using Microsoft.AspNetCore.Mvc.Authorization;
 using VoteMonitor.Api.Answer.Controllers;
-using VoteMonitor.Api.Location.Controllers;
-using VoteMonitor.Api.Location.Services;
-using VoteMonitor.Api.Observer.Controllers;
-using VoteMonitor.Api.Core.Services;
-using VoteMonitor.Api.Note.Controllers;
-using VoteMonitor.Api.Form.Controllers;
 using VoteMonitor.Api.Core;
 using VoteMonitor.Api.Core.Handlers;
-using VoteMonitor.Api.Notification.Controllers;
-using System.IO;
 using VoteMonitor.Api.Core.Options;
+using VoteMonitor.Api.Core.Services;
 using VoteMonitor.Api.DataExport.Controller;
+using VoteMonitor.Api.Form.Controllers;
+using VoteMonitor.Api.Location.Controllers;
+using VoteMonitor.Api.Location.Services;
+using VoteMonitor.Api.Note.Controllers;
+using VoteMonitor.Api.Notification.Controllers;
+using VoteMonitor.Api.Observer.Controllers;
 using VoteMonitor.Api.Statistics.Controllers;
+using VoteMonitor.Entities;
+using VotingIrregularities.Api.Extensions;
 using VotingIrregularities.Api.Extensions.Startup;
+using VotingIrregularities.Api.Options;
 
 namespace VotingIrregularities.Api
 {
     public class Startup
     {
-        private readonly Container _container = new Container { Options = { DefaultLifestyle = Lifestyle.Scoped, DefaultScopedLifestyle = new AsyncScopedLifestyle() } };
-
-        //private IConfiguration _configuration;
-
-        //public Startup(IConfiguration configuration)
-        //{
-        //    _configuration = configuration;
-        //}
-        public Startup(IHostingEnvironment env)
+        private readonly Container _container = new Container
         {
-            var builder = new ConfigurationBuilder()
-                .SetBasePath(env.ContentRootPath)
-                .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true)
-                .AddJsonFile($"appsettings.{env.EnvironmentName}.json", optional: true, reloadOnChange: true);
-
-            if (env.EnvironmentName.EndsWith("Development", StringComparison.CurrentCultureIgnoreCase))
+            Options =
             {
-                // For more details on using the user secret store see http://go.microsoft.com/fwlink/?LinkID=532709
-                builder.AddUserSecrets<Startup>();
+                DefaultLifestyle = Lifestyle.Scoped,
+                DefaultScopedLifestyle = new AsyncScopedLifestyle(),
+                //AllowOverridingRegistrations = true
             }
+        };
 
-            // This will push telemetry data through Application Insights pipeline faster, allowing you to view results immediately.
-            builder.AddApplicationInsightsSettings(developerMode: true);
-
-            builder.AddEnvironmentVariables();
-            Configuration = builder.Build();
+        public Startup(IConfiguration configuration, IHostingEnvironment env)
+        {
+            Environment = env;
+            Configuration = (IConfigurationRoot)configuration;
         }
 
         private IConfigurationRoot Configuration { get; }
+        private IHostingEnvironment Environment { get; }
 
         // This method gets called by the runtime. Use this method to add services to the container.
         public void ConfigureServices(IServiceCollection services)
@@ -86,15 +68,15 @@ namespace VotingIrregularities.Api
             // Get options from app settings
             services.AddOptions();
             services.ConfigureCustomOptions(Configuration);
-           
+
             services.ConfigureVoteMonitorAuthentication(Configuration);
             services.AddApplicationInsightsTelemetry(Configuration);
             services.AddMvc(config =>
                 {
-                    config.Filters.Add(new AuthorizeFilter( new AuthorizationPolicyBuilder()
+                    config.Filters.Add(new AuthorizeFilter(new AuthorizationPolicyBuilder()
                                                                         .RequireAuthenticatedUser()
                                                                         .RequireClaim(ClaimsHelper.IdNgo)
-                                                                        .Build())); 
+                                                                        .Build()));
                 })
                 .AddApplicationPart(typeof(PollingStationController).Assembly)
                 .AddApplicationPart(typeof(ObserverController).Assembly)
@@ -141,25 +123,30 @@ namespace VotingIrregularities.Api
                     options.IncludeXmlComments(api);
                 }
             });
-            services.UseSimpleInjectorAspNetRequestScoping(_container);
-            ConfigureContainer(services);
 
             ConfigureCache(services);
-            ConfigureFileLoader();
 
             services.AddCors(options => options.AddPolicy("Permissive", builder =>
             {
-	            builder.AllowAnyOrigin()
-		            .AllowAnyMethod()
-		            .AllowAnyHeader();
+                builder.AllowAnyOrigin()
+                    .AllowAnyMethod()
+                    .AllowAnyHeader();
             }));
 
-		}
+            services.AddSimpleInjector(_container, options =>
+            {
+                options.AddAspNetCore().AddControllerActivation();
+                options.AddLogging();
+            });
 
-		// This method gets called by the runtime. Use this method to configure the HTTP request pipeline.
-		public void Configure(IApplicationBuilder app,
-            IApplicationLifetime appLifetime)
+            RegisterAppServices(services);
+        }
+
+        // This method gets called by the runtime. Use this method to configure the HTTP request pipeline.
+        public void Configure(IApplicationBuilder app, IApplicationLifetime appLifetime)
         {
+            app.UseSimpleInjector(_container);
+
             app.UseStaticFiles();
 
             Log.Logger = new LoggerConfiguration()
@@ -169,46 +156,23 @@ namespace VotingIrregularities.Api
 
             appLifetime.ApplicationStopped.Register(Log.CloseAndFlush);
 
-            app.UseExceptionHandler(
-                builder =>
-                {
-                    builder.Run(context =>
+            if (!Environment.IsDevelopment())
+            {
+                app.UseExceptionHandler(
+                    builder =>
                     {
-                        context.Response.StatusCode = (int)HttpStatusCode.InternalServerError;
-                        context.Response.ContentType = "application/json";
-                        return Task.FromResult(0);
+                        builder.Run(context =>
+                            {
+                                context.Response.StatusCode = (int)HttpStatusCode.InternalServerError;
+                                context.Response.ContentType = "application/json";
+                                return Task.FromResult(0);
+                            }
+                        );
                     }
-                    );
-                }
-            );
-
+                );
+            }
 
             app.UseAuthentication();
-
-            RegisterOptionsInSimpleInjector(app);
-
-            RegisterServices(app);
-
-            ConfigureFileService(app);
-
-            ConfigureHash(app);
-
-            InitializeContainer(app);
-
-            //Registering dbContext
-            RegisterDbContext<VoteMonitorContext>(Configuration.GetConnectionString("DefaultConnection"));
-
-            RegisterAutomapper();
-
-            app.AddFirebase(Configuration, _container);
-
-            BuildMediator();
-
-            _container.Verify();
-
-            // initialization of the fileservice
-            var fileService = _container.GetInstance<IFileService>();
-            fileService.Initialize();
 
             // Enable middleware to serve generated Swagger as a JSON endpoint
             app.UseSwagger();
@@ -216,20 +180,32 @@ namespace VotingIrregularities.Api
             // Enable middleware to serve swagger-ui assets (HTML, JS, CSS etc.)
             app.UseSwaggerUI(o => o.SwaggerEndpoint("/swagger/v1/swagger.json", "MV API v1"));
             app.UseCors("Permissive");
-			app.UseMvc();
+            app.UseMvc();
+
+            _container.Verify();
+            FirebaseConfigurationExtension.ConfigurePrivateKey(Configuration);
+            InitializeStorage();
         }
 
-        private void RegisterOptionsInSimpleInjector(IApplicationBuilder app)
+        private void RegisterAppServices(IServiceCollection services)
         {
-            // these were already registered in the default container so we're going to pick them up from there..
-            _container.RegisterSingleton(() => app.ApplicationServices.GetService<IOptions<MobileSecurityOptions>>());
-            _container.RegisterSingleton(() => app.ApplicationServices.GetService<IOptions<DefaultNgoOptions>>());
-            _container.RegisterSingleton(() => app.ApplicationServices.GetService<IOptions<FileServiceOptions>>());
-            _container.RegisterSingleton(() => app.ApplicationServices.GetService<IOptions<BlobStorageOptions>>());
-            _container.RegisterSingleton(() => app.ApplicationServices.GetService<IOptions<HashOptions>>());
-            _container.RegisterSingleton(() => app.ApplicationServices.GetService<IOptions<JwtIssuerOptions>>());
-            _container.RegisterSingleton(() => app.ApplicationServices.GetService<IOptions<ApplicationCacheOptions>>());
-            _container.RegisterSingleton(() => app.ApplicationServices.GetService<IOptions<PollingStationsOptions>>());
+            _container.RegisterInstance(Configuration);
+            _container.Register<IPollingStationService, PollingStationService>(Lifestyle.Scoped);
+            _container.RegisterSingleton<IFirebaseService, FirebaseService>();
+            _container.RegisterSingleton<IFileLoader, XlsxFileLoader>();
+
+
+            RegisterFileService(services);
+            RegisterHashService(services);
+            // RegisterDbContext<VoteMonitorContext>(Configuration.GetConnectionString("DefaultConnection"));
+            RegisterAutomapper();
+            BuildMediator();
+        }
+
+        private void InitializeStorage()
+        {
+            var fileService = _container.GetInstance<IFileService>();
+            fileService.Initialize();
         }
 
         private void ConfigureCache(IServiceCollection services)
@@ -240,108 +216,79 @@ namespace VotingIrregularities.Api
             switch (cacheOptions.Implementation)
             {
                 case "NoCache":
-                    {
-                        _container.RegisterInstance<ICacheService>(new NoCacheService());
-                        break;
-                    }
+                {
+                    _container.RegisterInstance<ICacheService>(new NoCacheService());
+                    break;
+                }
                 case "RedisCache":
+                {
+                    _container.RegisterSingleton<ICacheService, CacheService>();
+                    services.AddDistributedRedisCache(options =>
                     {
-                        _container.RegisterSingleton<ICacheService, CacheService>();
-                        services.AddDistributedRedisCache(options =>
-                        {
-                            Configuration.GetSection("RedisCacheOptions").Bind(options);
-                        });
+                        Configuration.GetSection("RedisCacheOptions").Bind(options);
+                    });
 
-                        break;
-                    }
+                    break;
+                }
                 case "MemoryDistributedCache":
-                    {
-                        _container.RegisterSingleton<ICacheService, CacheService>();
-                        services.AddDistributedMemoryCache();
-                        break;
-                    }
+                {
+                    _container.RegisterSingleton<ICacheService, CacheService>();
+                    services.AddDistributedMemoryCache();
+                    break;
+                }
             }
         }
 
-        private void ConfigureFileLoader()
+        private void RegisterFileService(IServiceCollection services)
         {
-            _container.RegisterSingleton<IFileLoader, XlsxFileLoader>();
-            return;
-        }
+            services.Configure<FileServiceOptions>(Configuration.GetSection(nameof(FileServiceOptions)));
 
-        private void ConfigureFileService(IApplicationBuilder app)
-        {
-            var fileServiceOptions = app.ApplicationServices.GetService<IOptions<FileServiceOptions>>().Value;
+            var options = new FileServiceOptions();
+            Configuration.GetSection(nameof(FileServiceOptions)).Bind(options);
 
-            if (fileServiceOptions.Type == "LocalFileService")
+
+            if (options.Type == "LocalFileService")
+            {
                 _container.RegisterSingleton<IFileService, LocalFileService>();
+            }
             else
+            {
                 _container.RegisterSingleton<IFileService, BlobService>();
+            }
         }
 
-        private void ConfigureHash(IApplicationBuilder app)
+        private void RegisterHashService(IServiceCollection services)
         {
-            var hashOptions = app.ApplicationServices.GetService<IOptions<HashOptions>>().Value;
+            services.Configure<HashOptions>(Configuration.GetSection(nameof(HashOptions)));
 
-            if (hashOptions.ServiceType == nameof(HashServiceType.ClearText))
+            var options = new HashOptions();
+            Configuration.GetSection(nameof(HashOptions)).Bind(options);
+
+            if (options.ServiceType == nameof(HashServiceType.ClearText))
+            {
                 _container.RegisterSingleton<IHashService, ClearTextService>();
+            }
             else
+            {
                 _container.RegisterSingleton<IHashService, HashService>();
-        }
-
-        private void ConfigureContainer(IServiceCollection services)
-        {
-            services.AddSingleton<IControllerActivator>(
-                new SimpleInjectorControllerActivator(_container));
-            services.AddSingleton<IViewComponentActivator>(
-                new SimpleInjectorViewComponentActivator(_container));
-        }
-
-        private void RegisterServices(IApplicationBuilder app)
-        {
-            _container.Register<IPollingStationService, PollingStationService>(Lifestyle.Scoped);
-            
-        }
-
-        private void InitializeContainer(IApplicationBuilder app)
-        {
-            // Add application presentation components:
-            _container.RegisterMvcControllers(app);
-            _container.RegisterMvcViewComponents(app);
-
-            // Cross-wire ASP.NET services (if any). For instance:
-            _container.RegisterInstance(app.ApplicationServices.GetService<ILoggerFactory>());
-            _container.RegisterConditional(
-                typeof(ILogger),
-                c => typeof(Logger<>).MakeGenericType(c.Consumer.ImplementationType),
-                Lifestyle.Singleton,
-                c => true);
-
-            // NOTE: Prevent cross-wired instances as much as possible.
-            // See: https://simpleinjector.org/blog/2016/07/
-
-            _container.RegisterInstance<IConfigurationRoot>(Configuration);
+            }
         }
 
         private void RegisterDbContext<TDbContext>(string connectionString = null)
             where TDbContext : DbContext
         {
+
             if (!string.IsNullOrEmpty(connectionString))
             {
                 var optionsBuilder = new DbContextOptionsBuilder<TDbContext>();
-
                 optionsBuilder.UseSqlServer(connectionString);
-
                 _container.RegisterInstance(optionsBuilder.Options);
-                _container.Register<TDbContext>(Lifestyle.Scoped);
             }
-            else
-            {
-                _container.Register<TDbContext>(Lifestyle.Scoped);
-            }
+
+            _container.Register<TDbContext>(Lifestyle.Scoped);
         }
 
-        private IMediator BuildMediator()
+        private void BuildMediator()
         {
             var assemblies = GetAssemblies().ToArray();
             _container.RegisterSingleton<IMediator, Mediator>();
@@ -353,10 +300,6 @@ namespace VotingIrregularities.Api
 
             _container.RegisterInstance(Console.Out);
             _container.RegisterInstance(new ServiceFactory(_container.GetInstance));
-
-            var mediator = _container.GetInstance<IMediator>();
-
-            return mediator;
         }
 
         private void RegisterAutomapper()

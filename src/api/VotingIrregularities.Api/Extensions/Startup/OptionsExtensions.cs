@@ -18,9 +18,7 @@ namespace VotingIrregularities.Api.Extensions.Startup
             IConfigurationRoot configuration)
         {
             services.Configure<BlobStorageOptions>(configuration.GetSection(nameof(BlobStorageOptions)));
-            services.Configure<HashOptions>(configuration.GetSection(nameof(HashOptions)));
             services.Configure<MobileSecurityOptions>(configuration.GetSection(nameof(MobileSecurityOptions)));
-            services.Configure<FileServiceOptions>(configuration.GetSection(nameof(FileServiceOptions)));
             services.Configure<FirebaseServiceOptions>(configuration.GetSection(nameof(FirebaseServiceOptions)));
             services.Configure<DefaultNgoOptions>(configuration.GetSection(nameof(DefaultNgoOptions)));
             services.Configure<DefaultNgoOptions>(configuration.GetSection(nameof(ApplicationCacheOptions)));
@@ -28,4 +26,4 @@ namespace VotingIrregularities.Api.Extensions.Startup
             return services;
         }
     }
-} 
+}
